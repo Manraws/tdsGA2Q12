@@ -13,7 +13,7 @@ from starlette.middleware.cors import CORSMiddleware
 app = FastAPI()
 
 # Configure these environment variables before deployment.
-EMAIL = os.getenv("LOGIN_EMAIL", "your-logged-in-email@example.com")
+EMAIL = os.getenv("LOGIN_EMAIL", "23f3003865@ds.study.iitm.ac.in")
 
 ALLOWED_ORIGINS = [
     "https://app-yrrxdi.example.com",
