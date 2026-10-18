@@ -117,21 +117,19 @@ class RateLimitMiddleware:
         await self.app(scope, receive, send)
 
 
-# -----------------------------------------
-# Middleware 3: Scoped CORS
-# -----------------------------------------
+ 
+# Register inner → outer. CORS goes LAST so it is outermost and
+# adds headers to every response, including 429s and preflights.
+app.add_middleware(RateLimitMiddleware, limit=9, window=10)
+app.add_middleware(RequestContextMiddleware)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
+    allow_origins=["*"],
     allow_credentials=False,
     allow_methods=["GET", "OPTIONS"],
-    allow_headers=[
-        "X-Request-ID",
-        "X-Client-Id",
-        "Content-Type",
-    ],
+    allow_headers=["*"],
+    expose_headers=["X-Request-ID"],
 )
-
 # Middleware registration order matters:
 # The last added middleware wraps the earlier ones.
 app.add_middleware(RateLimitMiddleware, limit=9, window=10)
