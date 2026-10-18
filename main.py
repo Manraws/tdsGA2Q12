@@ -1,4 +1,3 @@
- 
 import os
 import time
 import uuid
@@ -6,23 +5,13 @@ from collections import defaultdict, deque
 from threading import Lock
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse
 from starlette.middleware.cors import CORSMiddleware
 
 
 app = FastAPI()
 
-# Configure these environment variables before deployment.
 EMAIL = os.getenv("LOGIN_EMAIL", "23f3003865@ds.study.iitm.ac.in")
-
-ALLOWED_ORIGINS = [
-    "https://app-yrrxdi.example.com",
-]
-
-# Add the actual exam page origin here through EXAM_ORIGIN.
-exam_origin = os.getenv("EXAM_ORIGIN")
-if exam_origin and exam_origin not in ALLOWED_ORIGINS:
-    ALLOWED_ORIGINS.append(exam_origin)
 
 
 # -----------------------------------------
@@ -38,9 +27,7 @@ class RequestContextMiddleware:
             return
 
         headers = dict(scope.get("headers", []))
-        request_id = headers.get(b"x-request-id", b"").decode(
-            "latin-1"
-        )
+        request_id = headers.get(b"x-request-id", b"").decode("latin-1")
 
         if not request_id:
             request_id = str(uuid.uuid4())
@@ -49,17 +36,16 @@ class RequestContextMiddleware:
 
         async def send_with_request_id(message):
             if message["type"] == "http.response.start":
-                response_headers = list(
-                    message.get("headers", [])
-                )
+                # Drop any existing x-request-id, then set exactly one.
+                response_headers = [
+                    (k, v)
+                    for k, v in message.get("headers", [])
+                    if k.lower() != b"x-request-id"
+                ]
                 response_headers.append(
-                    (
-                        b"x-request-id",
-                        request_id.encode("latin-1"),
-                    )
+                    (b"x-request-id", request_id.encode("latin-1"))
                 )
                 message["headers"] = response_headers
-
             await send(message)
 
         await self.app(scope, receive, send_with_request_id)
@@ -77,34 +63,26 @@ class RateLimitMiddleware:
         self.lock = Lock()
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] != "http":
-            await self.app(scope, receive, send)
-            return
-
-        # Apply the limit to /ping requests.
-        if scope["path"] != "/ping":
+        # Only limit real GET /ping requests (not preflights).
+        if (
+            scope["type"] != "http"
+            or scope["path"] != "/ping"
+            or scope["method"] == "OPTIONS"
+        ):
             await self.app(scope, receive, send)
             return
 
         headers = dict(scope.get("headers", []))
-        client_id = headers.get(
-            b"x-client-id", b"unknown"
-        ).decode("latin-1")
+        client_id = headers.get(b"x-client-id", b"unknown").decode("latin-1")
 
         now = time.monotonic()
-
         with self.lock:
             bucket = self.requests[client_id]
-
-            # Remove requests outside the 10-second window.
             while bucket and now - bucket[0] >= self.window:
                 bucket.popleft()
-
-            if len(bucket) >= self.limit:
-                limited = True
-            else:
+            limited = len(bucket) >= self.limit
+            if not limited:
                 bucket.append(now)
-                limited = False
 
         if limited:
             response = JSONResponse(
@@ -117,9 +95,8 @@ class RateLimitMiddleware:
         await self.app(scope, receive, send)
 
 
- 
-# Register inner → outer. CORS goes LAST so it is outermost and
-# adds headers to every response, including 429s and preflights.
+# Last added = outermost. Final stack:
+# CORS -> RequestContext -> RateLimit -> app
 app.add_middleware(RateLimitMiddleware, limit=9, window=10)
 app.add_middleware(RequestContextMiddleware)
 app.add_middleware(
@@ -128,17 +105,10 @@ app.add_middleware(
     allow_credentials=False,
     allow_methods=["GET", "OPTIONS"],
     allow_headers=["*"],
-    expose_headers=["X-Request-ID"],
+    expose_headers=["X-Request-ID"],   # lets the browser read the echoed header
 )
-# Middleware registration order matters:
-# The last added middleware wraps the earlier ones.
-app.add_middleware(RateLimitMiddleware, limit=9, window=10)
-app.add_middleware(RequestContextMiddleware)
 
 
-# -----------------------------------------
-# Endpoint
-# -----------------------------------------
 @app.get("/ping")
 async def ping(request: Request):
     return {
@@ -147,13 +117,6 @@ async def ping(request: Request):
     }
 
 
-@app.options("/ping")
-async def ping_options():
-    # Normally handled by CORSMiddleware for browser
-    # preflight requests from permitted origins.
-    return Response(status_code=204)
-
-
 @app.get("/")
 async def root():
-    return {"status": "ok"} 
+    return {"status": "ok"}
